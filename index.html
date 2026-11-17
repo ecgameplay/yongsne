@@ -135,13 +135,23 @@ main.band{padding:12px 32px 56px;background:none}
  .pg{padding:20px 16px 0}main.band{padding:8px 16px 96px}#ctb{bottom:calc(72px + env(safe-area-inset-bottom,0px))}
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script>
 window.GAUTH=(function(){
+/* ===== Supabase 연결 설정 =====
+   Supabase 대시보드 → Project Settings → API 에서 복사해 아래 두 칸에 붙여넣으세요.
+   SB_URL: Project URL   /   SB_KEY: anon(public) 키 또는 publishable 키
+   (service_role / secret 키는 절대 넣으면 안 돼요. 두 칸이 비어 있으면 예전처럼 이 브라우저에만 저장돼요.) */
+var SB_URL="https://iyfrzumvdjqocplzsota.supabase.co",SB_KEY="sb_publishable_LPI4AXbYxbd-mFfyBwGarQ_Xe42uX1_";
+var CLOUD=!!(SB_URL&&SB_KEY),SBC=null;
+if(CLOUD&&window.supabase){try{SBC=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});}catch(e){}}
 var AK="guild-accounts",SK="guild-session",me=null;
 function ld(){try{return JSON.parse(localStorage.getItem(AK)||"{}")||{};}catch(e){return {};}}
-var A=ld();
-try{me=sessionStorage.getItem(SK)||localStorage.getItem(SK);}catch(e){}
-if(me&&!A[me])me=null;
+var A=CLOUD?{}:ld();
+try{me=CLOUD?localStorage.getItem(SK):(sessionStorage.getItem(SK)||localStorage.getItem(SK));}catch(e){}
+function sbTok(){try{for(var i=0;i<localStorage.length;i++){if(/^sb-.+-auth-token$/.test(localStorage.key(i)))return true;}}catch(e){}return false;}
+if(CLOUD){if(!SBC||!sbTok())me=null;}else if(me&&!A[me])me=null;
+if(CLOUD&&SBC&&me){try{SBC.auth.onAuthStateChange(function(ev){if(ev==="SIGNED_OUT"){try{localStorage.removeItem(SK);}catch(e){}location.reload();}});}catch(e){}}
 async function hs(pw,salt){
  try{var e=new TextEncoder(),km=await crypto.subtle.importKey("raw",e.encode(pw),"PBKDF2",false,["deriveBits"]);
   var b=await crypto.subtle.deriveBits({name:"PBKDF2",salt:e.encode(salt),iterations:100000,hash:"SHA-256"},km,256);
@@ -149,7 +159,44 @@ async function hs(pw,salt){
  }catch(x){var h=5381,s=salt+pw;for(var i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))|0;return "f"+(h>>>0).toString(16);}
 }
 function sess(id,keep){try{sessionStorage.removeItem(SK);localStorage.removeItem(SK);(keep?localStorage:sessionStorage).setItem(SK,id);}catch(e){}}
+function sbMsg(e){var m=String((e&&e.message)||e||"");
+ if(/invalid login credentials/i.test(m))return "이메일 또는 비밀번호가 맞지 않아요.";
+ if(/email not confirmed/i.test(m))return "이메일 인증을 먼저 완료해주세요. (가입 확인 메일의 링크)";
+ if(/already (been )?registered/i.test(m))return "이미 가입된 이메일이에요.";
+ if(/rate limit|too many/i.test(m))return "요청이 너무 많아요. 잠시 후 다시 시도해주세요.";
+ if(/password/i.test(m))return "비밀번호가 너무 짧거나 약해요. 6자 이상으로 해주세요.";
+ return "오류: "+m;}
+async function csignup(em,pw){
+ em=String(em||"").trim().toLowerCase();
+ if(!SBC)return "서버 연결 라이브러리를 불러오지 못했어요. 새로고침해 주세요.";
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em))return "올바른 이메일 주소를 입력해주세요.";
+ if(pw.length<6)return "비밀번호는 6자 이상으로 해주세요.";
+ try{var r=await SBC.auth.signUp({email:em,password:pw});
+  if(r.error)return sbMsg(r.error);
+  var u=r.data&&r.data.user;
+  if(u&&Array.isArray(u.identities)&&!u.identities.length)return "이미 가입된 이메일이에요.";
+  if(r.data&&r.data.session){sess(em,true);location.reload();return "";}
+  return "가입 확인 메일을 보냈어요. 메일의 링크를 누른 뒤 로그인하세요.";
+ }catch(x){return sbMsg(x);}}
+async function clogin(em,pw){
+ em=String(em||"").trim().toLowerCase();
+ if(!SBC)return "서버 연결 라이브러리를 불러오지 못했어요. 새로고침해 주세요.";
+ try{var r=await SBC.auth.signInWithPassword({email:em,password:pw});
+  if(r.error)return sbMsg(r.error);
+  sess(em,true);location.reload();return "";
+ }catch(x){return sbMsg(x);}}
+var sbUid=null,sbHas=false,sbTs=0;
+async function sbUser(){var r=await SBC.auth.getSession(),s=r&&r.data&&r.data.session;if(!s)throw new Error("no-session");return s.user.id;}
+async function pull(){var uid=await sbUser(),r=await SBC.from("guild_state").select("data,ts").eq("user_id",uid).maybeSingle();
+ if(r.error)throw r.error;sbUid=uid;sbHas=!!r.data;sbTs=r.data?(+r.data.ts||0):0;return r.data?r.data.data:null;}
+async function push(s){var uid=sbUid||await sbUser(),ts=+s.ts||Date.now(),r;
+ if(!sbHas){r=await SBC.from("guild_state").insert({user_id:uid,data:s,ts:ts});
+  if(r.error){if(r.error.code==="23505")return false;throw r.error;}sbHas=true;sbUid=uid;}
+ else{r=await SBC.from("guild_state").update({data:s,ts:ts,updated_at:new Date().toISOString()}).eq("user_id",uid).lte("ts",sbTs).select("user_id");
+  if(r.error)throw r.error;if(!r.data||!r.data.length)return false;}
+ sbTs=ts;return true;}
 async function signup(id,pw,keep){
+ if(CLOUD)return csignup(id,pw);
  if(!/^[A-Za-z0-9가-힣_.-]{2,20}$/.test(id))return "아이디는 2~20자의 한글·영문·숫자·_ . - 만 쓸 수 있어요.";
  if(pw.length<4)return "비밀번호는 4자 이상으로 해주세요.";
  A=ld();if(A[id])return "이미 가입된 아이디예요.";
@@ -159,11 +206,12 @@ async function signup(id,pw,keep){
  sess(id,keep);location.reload();return "";
 }
 async function login(id,pw,keep){
+ if(CLOUD)return clogin(id,pw);
  A=ld();var a=A[id];
  if(!a||await hs(pw,a.s)!==a.h)return "아이디 또는 비밀번호가 맞지 않아요.";
  sess(id,keep);location.reload();return "";
 }
-function logout(){try{sessionStorage.removeItem(SK);localStorage.removeItem(SK);}catch(e){}location.reload();}
+function logout(){function done(){try{sessionStorage.removeItem(SK);localStorage.removeItem(SK);}catch(e){}location.reload();}if(CLOUD&&SBC){SBC.auth.signOut().then(done,done);}else done();}
 function ui(){
  var st=document.createElement("style");
  st.textContent="#gauth{position:fixed;inset:0;z-index:99999;background:var(--bg,#16181d);color:var(--fg,#e6e8eb);display:flex;align-items:center;justify-content:center;padding:16px;font-family:inherit}#gauth .bx{width:100%;max-width:340px;border:1px solid var(--bd,#343a44);border-radius:14px;padding:22px;background:var(--hd,#222630);box-shadow:0 8px 30px rgba(0,0,0,.35)}#gauth h2{margin:0 0 4px;font-size:20px;border:0;padding:0}#gauth p{margin:0 0 14px;font-size:13px;color:var(--mut,#9aa1ab)}#gauth .tb{display:flex;gap:6px;margin-bottom:12px}#gauth .tb button{flex:1}#gauth input[type=text],#gauth input[type=password]{display:block;width:100%;box-sizing:border-box;margin:0 0 8px;padding:10px;border:1px solid var(--bd,#343a44);border-radius:8px;background:var(--bg,#16181d);color:var(--fg,#e6e8eb);font:inherit;text-align:left}#gauth label.k{display:flex;gap:6px;align-items:center;font-size:13px;margin:4px 0 10px}#gauth .go{width:100%;padding:10px}#gauth .er{min-height:18px;margin:0 0 8px;font-size:13px;color:var(--bad,#f87171)}";
@@ -173,14 +221,15 @@ function ui(){
    var b=document.createElement("button");b.type="button";b.className="g";b.textContent="로그아웃 · "+me;b.onclick=logout;box.appendChild(b);});
   return;
  }
- var mode="in",first=!Object.keys(A).length,d=document.createElement("div");d.id="gauth";
+ var mode="in",first=!CLOUD&&!Object.keys(A).length,legacy=false,d=document.createElement("div");try{legacy=!!(localStorage.getItem("guild-state")||localStorage.getItem("guild-rows"));}catch(e){}d.id="gauth";
  d.innerHTML='<div class="bx"><h2>길드원 현황표</h2><p id="gsub"></p><div class="tb"><button type="button" id="gti">로그인</button><button type="button" id="gts" class="g">가입</button></div><input type="text" id="gid" placeholder="아이디" autocomplete="username"><input type="password" id="gpw" placeholder="비밀번호" autocomplete="current-password"><input type="password" id="gp2" placeholder="비밀번호 확인" hidden autocomplete="new-password"><label class="k"><input type="checkbox" id="gkp" checked>로그인 유지</label><div class="er" id="ger"></div><button type="button" class="go" id="ggo"></button></div>';
  document.body.appendChild(d);
  var $=function(i){return document.getElementById(i);};
+ if(CLOUD){$("gid").placeholder="이메일";$("gid").setAttribute("autocomplete","email");$("gid").setAttribute("inputmode","email");var kp=d.querySelector("label.k");if(kp)kp.hidden=true;}
  function set(m){mode=m;$("gti").className=m==="in"?"":"g";$("gts").className=m==="up"?"":"g";$("gp2").hidden=m!=="up";$("gpw").autocomplete=m==="up"?"new-password":"current-password";$("ggo").textContent=m==="up"?"가입하기":"로그인";$("ger").textContent="";
-  $("gsub").textContent=m==="up"?(first?"첫 가입 계정이 지금까지 쓰던 데이터를 이어받아요.":"가입하면 내 전용 현황표가 새로 만들어져요."):"아이디와 비밀번호로 로그인하세요.";}
+  $("gsub").textContent=m==="up"?(first&&legacy?"이 브라우저에 저장돼 있던 기존 데이터를 첫 가입 계정이 이어받아요.":"가입하면 내 전용 현황표가 새로 만들어져요. 가입 후 본캐 정보에서 본캐릭터를 만들어 시작하세요."):(CLOUD?"이메일과 비밀번호로 로그인하세요.":"아이디와 비밀번호로 로그인하세요.");}
  async function go(){var id=$("gid").value.trim(),pw=$("gpw").value,m="";
-  if(!id||!pw)m="아이디와 비밀번호를 입력해주세요.";
+  if(!id||!pw)m=CLOUD?"이메일과 비밀번호를 입력해주세요.":"아이디와 비밀번호를 입력해주세요.";
   else if(mode==="up"&&pw!==$("gp2").value)m="비밀번호 확인이 달라요.";
   else m=await (mode==="up"?signup:login)(id,pw,$("gkp").checked);
   $("ger").textContent=m;}
@@ -189,7 +238,7 @@ function ui(){
  set(first?"up":"in");
 }
 document.addEventListener("DOMContentLoaded",ui);
-return{me:function(){return me;},k:function(b){return me?(A[me].n?b+":"+me:b):b+":locked";}};
+return{me:function(){return me;},dk:function(){var a=me&&A[me];return(a&&a.n)?"guild/u_"+Array.from(new TextEncoder().encode(me)).map(function(x){return x.toString(16).padStart(2,"0");}).join(""):"guild/data";},cloud:function(){return(CLOUD&&SBC&&me)?{pull:pull,push:push}:null;},k:function(b){return me?((CLOUD||A[me].n)?b+":"+me:b):b+":locked";}};
 })();
 </script>
 <script>(function(){var d=document.documentElement,v="pc",t="dark";try{v=localStorage.getItem("guild-view")||(innerWidth<900?"mobile":"pc");t=localStorage.getItem("guild-theme")||"dark";}catch(e){if(innerWidth<900)v="mobile";}d.setAttribute("data-view",v);d.setAttribute("data-theme",t);})();</script>
@@ -332,6 +381,7 @@ html[data-view=mobile] #ctb{bottom:calc(72px + env(safe-area-inset-bottom,0px))}
 <div class="sub">카드를 눌러 전투력, 장비 이름, 등급, 강화 수치를 바로 고쳐요. 수정한 내용은 자동으로 저장돼요.</div>
 <div class="bar"><button id="g-add">+ 본캐릭터 추가</button><span id="g-chips"></span></div>
 <div class="g-sm" id="g-sum"></div>
+<div id="g-next"></div>
 <div class="g-cg" id="g-list"></div>
 </div>
 <div id="sr" data-p="rc"><h2>리세라마</h2>
@@ -339,6 +389,7 @@ html[data-view=mobile] #ctb{bottom:calc(72px + env(safe-area-inset-bottom,0px))}
 <div class="bar"><span id="r-chips"></span></div>
 <div class="g-cg" id="r-list"></div></div>
 <div id="s2" data-p="eq">
+<div class="g-need" hidden>아직 본캐릭터가 없어요. <a href="#grow">본캐 정보</a>에서 본캐릭터를 먼저 만들면 이 화면에 자동으로 연결돼요.</div>
 <div class="bar">
   <button id="addc">+ 캐릭터 추가</button>
   <button class="g" id="csv2">장비 CSV 내려받기</button>
@@ -360,6 +411,7 @@ html[data-view=mobile] #ctb{bottom:calc(72px + env(safe-area-inset-bottom,0px))}
 </div>
 
 <div id="s1" data-p="event">
+<div class="g-need" hidden>아직 본캐릭터가 없어요. <a href="#grow">본캐 정보</a>에서 본캐릭터를 먼저 만들면 이 화면에 자동으로 연결돼요.</div>
 <h2>4. 이벤트&amp;미션 현황</h2>
 <div class="bar">
   <button id="add">+ 길드원 추가</button>
@@ -374,6 +426,7 @@ html[data-view=mobile] #ctb{bottom:calc(72px + env(safe-area-inset-bottom,0px))}
 </div>
 
 <div id="s1r" data-p="raid">
+<div class="g-need" hidden>아직 본캐릭터가 없어요. <a href="#grow">본캐 정보</a>에서 본캐릭터를 먼저 만들면 이 화면에 자동으로 연결돼요.</div>
 <h2>5. 리세라마 현황</h2>
 <div class="gp" id="gp"><b>그룹 색</b>
   <label><input type="color" data-g="0">1그룹</label><label><input type="color" data-g="1">2그룹</label><label><input type="color" data-g="2">3그룹</label><label><input type="color" data-g="3">4그룹</label>
@@ -437,16 +490,7 @@ html[data-view=mobile] #ctb{bottom:calc(72px + env(safe-area-inset-bottom,0px))}
 <script>
 const DEFAULT={
  missions:[{id:"m1",name:"성소",max:15},{id:"m2",name:"길드상품",max:50},{id:"m3",name:"도전",max:15},{id:"m4",name:"월드보스",max:5}],
- rows:[
-  {name:"쌀먹 라베른",lv:59,seen:"16일 새벽 4시",vals:{m1:14,m2:50,m3:6,m4:0},wrote:"13일 완료",note:"13일 오후 4시 성소 완료"},
-  {name:"강덕9",acct:"강덕9",lv:64,seen:"16일 새벽 4시",vals:{m1:15,m2:50,m3:11,m4:5},wrote:"13일 완료",note:""},
-  {name:"강덕9 (부캐1)",acct:"강덕9",lv:"",seen:"",vals:{m1:0,m2:0,m3:0,m4:0},wrote:"",note:"강덕9 계정 부캐"},
-  {name:"강덕9 (부캐2)",acct:"강덕9",lv:"",seen:"",vals:{m1:0,m2:0,m3:0,m4:0},wrote:"",note:"강덕9 계정 부캐"},
-  {name:"강덕9 (부캐3)",acct:"강덕9",lv:"",seen:"",vals:{m1:0,m2:0,m3:0,m4:0},wrote:"",note:"강덕9 계정 부캐"},
-  {name:"백야령",lv:61,seen:"13일 오후 6시",vals:{m1:13,m2:50,m3:9,m4:2},wrote:"13일 완료",note:"13일 오후 3시 성소 완료"},
-  {name:"제우스연대기",lv:61,seen:"13일 밤 11시 30분",vals:{m1:15,m2:45,m3:7,m4:0},wrote:"13일 완료",note:"13일 오전 9시 성소 완료"},
-  {name:"덕9",lv:61,seen:"14일 밤 11시 30분",vals:{m1:15,m2:50,m3:6,m4:4},wrote:"13일 완료",note:"13일 오전 8시 성소 완료"}
- ]};
+ rows:[]};
 DEFAULT.cleon={
  plans:[
   {name:"① 메인퀘만 + 분해 + 의뢰",goal:900,main:170,gear:320,acc:120,quest:300,way:"메인퀘 진행, 장비·장신구 분해, 의뢰퀘 (3시간 30분)",note:"의뢰 300개 이상이라 910개 이상"},
@@ -466,9 +510,9 @@ const GC=["#3b82f6","#22c55e","#f59e0b","#ec4899"];
 const GEAR=[["weapon","무기"],["helm","투구"],["armor","갑옷"],["gloves","장갑"],["pants","바지"],["shoes","신발"],["cape","망토"],["ring","반지"],["neck","목걸이"],["ear","귀걸이"],["belt","허리띠"]];
 const newChar=n=>({name:n||"",look:"",trans:"",chr:"",power:"",gear:{}});
 DEFAULT.chars=DEFAULT.rows.map(r=>newChar(r.name));DEFAULT.log=[];
-DEFAULT.rows.forEach(r=>r.solo=r.name==="강덕9");DEFAULT.gcolors=GC.slice();
+DEFAULT.gcolors=GC.slice();
 const gcs=d=>Array.isArray(d.gcolors)&&d.gcolors.length>=4?d.gcolors:GC.slice();
-const rw=r=>({...r,vals:r.vals||{},solo:r.solo===undefined?r.name==="강덕9":r.solo});
+const rw=r=>({...r,vals:r.vals||{},solo:!!r.solo});
 const cl=d=>d.cleon&&Array.isArray(d.cleon.plans)?d.cleon:JSON.parse(JSON.stringify(DEFAULT.cleon));
 const lg=d=>Array.isArray(d.log)?d.log:[];
 const ch=d=>Array.isArray(d.chars)?d.chars:JSON.parse(JSON.stringify(DEFAULT.chars));
@@ -484,11 +528,11 @@ function normalize(d){
   const mp=[["m1","성소","sanc",15],["m2","길드상품","prod",50],["m3","도전","chal",15],["m4","월드보스","boss",5]];
   return {missions:mp.map(m=>({id:m[0],name:m[1],max:m[3]})),
     rows:d.rows.map(r=>{const v={};mp.forEach(m=>v[m[0]]=r[m[2]]??0);
-      return {name:r.name,lv:r.lv,seen:r.seen,vals:v,wrote:r.wrote,note:r.note,solo:r.name==="강덕9"};}),gcolors:gcs(d),chars:ch(d),cleon:cl(d),log:lg(d),ts:+d.ts||0};
+      return {name:r.name,lv:r.lv,seen:r.seen,vals:v,wrote:r.wrote,note:r.note,solo:false};}),gcolors:gcs(d),chars:ch(d),cleon:cl(d),log:lg(d),ts:+d.ts||0};
 }
 
 let GR=new Map(),GINFO={},dirty=false;
-// 계정 키: 계정 칸이 있으면 그 값, 없으면 이름에서 괄호 앞 부분(강덕9 (부캐1) → 강덕9)
+// 계정 키: 계정 칸이 있으면 그 값, 없으면 이름에서 괄호 앞 부분(예: 이름 (부캐1) → 이름)
 const ak=r=>{const a=String(r.acct||"").trim();if(a)return a;const n=String(r.name||"").trim(),m=/^(.*?)\s*[(（]/.exec(n);return (m&&m[1].trim())||n;};
 const sameAcct=(a,b)=>{const x=ak(a);return x!==""&&x===ak(b);};
 const gcol=n=>n?(S.gcolors[n-1]||"#9ca3af"):"";
@@ -882,7 +926,7 @@ async function save(){
   try{
     if(ref){await ref.set(S);st.textContent="저장됨 ✓ "+new Date().toLocaleTimeString("ko-KR");}
     else st.textContent=lok?"이 브라우저에 저장됨 ✓ "+new Date().toLocaleTimeString("ko-KR"):"저장 실패";
-  }catch(e){st.textContent=lok?"서버 저장 실패 · 이 브라우저에 저장됨":"저장 실패";}
+  }catch(e){st.textContent=(e&&e.message==="conflict")?"다른 기기에서 더 최근에 저장돼 있어 서버 내용을 새로 불러왔어요":(lok?"서버 저장 실패 · 이 브라우저에 저장됨":"저장 실패");}
 }
 function flush(){if(!pend)return;try{S.ts=Date.now();localStorage.setItem(LS,JSON.stringify(S));pend=false;}catch(e){}}
 addEventListener("pagehide",flush);
@@ -1019,11 +1063,28 @@ try{
   if(n)S=n;
 }catch(e){}
 render();
+if(!(Array.isArray(S.chars)&&S.chars.length)){try{showPage("grow",true);}catch(e){}}
+(async()=>{
+  const C=GAUTH.cloud();if(!C)return;
+  let data=null;
+  try{data=await C.pull();}catch(e){st.textContent="서버에 연결하지 못했어요 · 이 브라우저에만 저장돼요";return;}
+  const n=normalize(data);
+  if(data&&!n){st.textContent="서버 데이터를 읽지 못해 서버에는 저장하지 않아요";return;}
+  const put=async s=>{
+    if(await C.push(s))return;
+    let d2=null;try{d2=await C.pull();}catch(e){}
+    const n2=normalize(d2);
+    if(n2){S=n2;try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}render();}
+    throw new Error("conflict");};
+  ref={set:put};
+  if(n&&(n.ts||0)>(S.ts||0)){S=n;try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}render();st.textContent="서버에서 불러옴 ✓";}
+  else{try{S.ts=S.ts||Date.now();await put(S);st.textContent="서버에 저장됨 ✓";}catch(e){st.textContent="서버 저장 실패 · 이 브라우저에 저장됨";}}
+})();
 (async()=>{
   try{
-    if(!window.claude)return;
+    if(!window.claude||!GAUTH.me()||GAUTH.cloud())return;
     const d=await claude.use("db");if(!d)return;
-    ref=d.doc("guild/data");
+    ref=d.doc(GAUTH.dk());
     let snap=null;try{snap=await ref.get();}catch(e){}
     const data=snap&&(snap.data?snap.data():snap);
     const n=normalize(data);
@@ -1057,11 +1118,21 @@ function card(c,i){prep(c);const o=open===i;
  return h+'<div class="g-ed"><div class="g-f"><label>이름<input data-f="name" value="'+E(c.name)+'"></label><label>직업<input data-f="chr" value="'+E(c.chr)+'"></label><label>레벨<input data-f="lv" inputmode="numeric" value="'+E(c.lv)+'"></label><label>외형<select data-f="look">'+opts(c.look)+'</select></label><label>초월<select data-f="trans">'+opts(c.trans)+'</select></label></div><div class="g-gr">'+GEAR.map(g=>row(c,g)).join("")+'</div><div class="g-ft"><button type="button" class="g-del" data-a="del">'+(del===i?"정말 삭제할까요?":"캐릭터 삭제")+'</button></div></div></div>';}
 function stats(){const L=S.chars.map(c=>({c,p:num(c.power)})).sort((a,b)=>b.p-a.p),t=L.reduce((a,x)=>a+x.p,0);
  sum.innerHTML='<div class="g-st"><b>'+L.length+'</b><span>캐릭터</span></div><div class="g-st"><b>'+(L[0]?L[0].p.toLocaleString("en-US"):0)+'</b><span>최고 전투력'+(L[0]?" · "+E(L[0].c.name):"")+'</span></div>';}
+const welcome=()=>'<div class="g-wel"><h3>처음 오셨네요! 본캐릭터부터 만들어 주세요</h3><p>여기서 만든 본캐릭터는 <b>리세라마 · 리세 편집 · 일정 표 · 본캐 장비 표</b>에 자동으로 연결돼요. 이름만 입력해도 시작할 수 있어요.</p><div class="g-wf"><label>이름<input id="g-wn" maxlength="30" placeholder="본캐릭터 이름" autocomplete="off"></label><label>직업<input id="g-wj" maxlength="20" placeholder="선택" autocomplete="off"></label><label>레벨<input id="g-wl" inputmode="numeric" placeholder="선택" autocomplete="off"></label></div><div class="g-we" id="g-we"></div><button type="button" id="g-wb">본캐릭터 만들기</button></div>';
+function bindWelcome(){const b=document.getElementById("g-wb"),n=document.getElementById("g-wn");if(!b||!n)return;
+ const go=()=>{const name=n.value.trim(),er=document.getElementById("g-we");
+  if(!name){er.textContent="본캐릭터 이름을 입력해 주세요.";n.focus();return;}
+  const c=newChar(name);c.chr=document.getElementById("g-wj").value.trim();c.lv=num(document.getElementById("g-wl").value)||"";
+  S.chars.push(c);sel=-1;ed=true;draw();queue();};
+ b.onclick=go;root.querySelectorAll(".g-wel input").forEach(i=>{i.onkeydown=e=>{if(e.key==="Enter"&&!e.isComposing){e.preventDefault();go();}};});
+ setTimeout(()=>{try{n.focus();}catch(e){}},0);}
 function draw(){if(!Array.isArray(S.chars))return;stats();
  const L=S.chars.map((c,i)=>({c,i,p:num(c.power)})).sort((a,b)=>b.p-a.p);
  if(sel>=S.chars.length)sel=-1;open=sel;
  document.getElementById("g-chips").innerHTML='<button type="button" class="cp'+(sel===-1?" on":"")+'" data-i="-1">전체</button>'+L.map(x=>'<button type="button" class="cp'+(x.i===sel?" on":"")+'" data-i="'+x.i+'">'+(E(x.c.name)||"이름 없음")+"</button>").join("");
- root.innerHTML=L.length?(sel>=0?card(S.chars[sel],sel):L.map(x=>card(x.c,x.i)).join("")):'<p class="sub">아직 캐릭터가 없어요. “본캐릭터 추가”를 눌러 시작하세요.</p>';
+ root.innerHTML=L.length?(sel>=0?card(S.chars[sel],sel):L.map(x=>card(x.c,x.i)).join("")):welcome();
+ const nx=document.getElementById("g-next");if(nx)nx.innerHTML=(S.chars.length&&!S.rows.length)?'<div class="g-nx"><b>다음 단계</b> · <a href="#rc">리세 편집</a>에서 이 본캐릭터의 부케를 추가하고 성소·리세라마 시각을 입력하면, 리세라마 화면에 일정이 자동으로 나타나요.</div>':"";
+ if(!L.length)bindWelcome();
  document.getElementById("g-dl").innerHTML=[...new Set(S.chars.flatMap(c=>Object.values(c.gear||{})))].filter(Boolean).map(v=>'<option value="'+E(v)+'">').join("");}
 function lite(cc,c){cc.querySelector(".g-nm").innerHTML=nm(c);{const ch=document.querySelector('#g-chips [data-i="'+cc.dataset.i+'"]');if(ch)ch.textContent=c.name||"이름 없음";}cc.querySelector(".g-sub").innerHTML=sub(c);{const p=cc.querySelector(".g-pw");if(document.activeElement!==p)p.value=c.power||"";}cc.querySelector(".g-ch").innerHTML=chips(c);cc.querySelector(".g-sl").innerHTML=tiles(c);stats();}
 const show=()=>{const el=root.querySelector(".g-cc.open");if(el)el.scrollIntoView({block:"nearest"});};
@@ -1164,7 +1235,7 @@ function agenda(A,now){
  ev.sort((p,q)=>p.t-q.t);
  const show=ev.slice(0,12);let last="",h="";
  show.forEach(e=>{const d=dayLb(e.t);if(d!==last){h+='<div class="hv-dl">'+d+"</div>";last=d;}
-  h+='<div class="hv-ev"><span class="hv-tm">'+tmo(e.t)+'</span><span class="hv-t '+(e.k==="sanc"?"sanc":"no")+'">'+(e.k==="sanc"?"성소 완성":"진행 가능")+'</span><div class="hv-qn"><b>'+E(e.n)+'</b><small>'+E(e.s)+'</small></div><span class="hv-left">'+fmtDur(e.t-now)+" 후</span></div>";});
+  h+='<div class="hv-ev"><span class="hv-tm">'+tmo(e.t)+'</span><span class="hv-t '+(e.k==="sanc"?"sanc":"no")+'">'+(e.k==="sanc"?"성소 완성중":"생성 제한")+'</span><div class="hv-qn"><b>'+E(e.n)+'</b><small>'+E(e.s)+'</small></div><span class="hv-left">'+fmtDur(e.t-now)+" 후</span></div>";});
  if(ev.length>show.length)h+='<div class="h-em">외 '+(ev.length-show.length)+"건 더 있어요.</div>";
  return h||'<div class="h-em">예정된 일정이 없어요. 리세라마 탭에서 성소·부케 시간을 입력하면 여기에 나타나요.</div>';}
 function nextBox(a,now){
@@ -1208,7 +1279,7 @@ function draw(){
  const Q=queue(A,G,now);
  const S1=(v,l,c)=>'<div class="hv-s '+c+'"><b>'+v+"</b><span>"+l+"</span></div>";
  $h.innerHTML='<div class="hv-sum">'+S1(n("ok"),"지금 진행 가능","ok")+S1(n("ing"),"진행 중","ing")+S1(n("del"),"삭제 가능","del")+S1(sdn+"/"+sc.length,"성소 완성","sanc")+"</div>"
-  +'<section class="hv-blk" data-b="cards"><h3 class="hv-h dg">본캐릭터별 현황</h3><div class="hv-cards">'+(cardOrder(A,now).map(a=>acard(a,now)).join("")||'<div class="h-em">본캐릭터 탭에서 본캐릭터를 추가하세요.</div>')+"</div></section>"
+  +'<section class="hv-blk" data-b="cards"><h3 class="hv-h dg">본캐릭터별 현황</h3><div class="hv-cards">'+(cardOrder(A,now).map(a=>acard(a,now)).join("")||'<div class="h-em">아직 본캐릭터가 없어요. <a href="#grow">본캐 정보</a>에서 본캐릭터를 먼저 만들면 여기에 자동으로 나타나요.</div>')+"</div></section>"
   +'<div class="hv-top"><section class="hv-p hv-blk" data-b="now"><h3 class="dg">지금 할 일</h3>'+(Q.length?Q.join(""):'<div class="h-em">지금 할 일이 없어요. 오른쪽 일정에서 다음 시각을 확인하세요.</div>')+'</section>'
   +'<section class="hv-p hv-blk" data-b="next"><h3 class="dg">다음 일정</h3>'+agenda(A,now)+"</section></div>"
   +'<div class="hv-rst"><button type="button" class="cp" data-lr="1">배치 초기화</button><small>제목을 끌어서 위치를 옮길 수 있어요</small></div>';
@@ -1295,7 +1366,7 @@ function draw(){if(!Array.isArray(S.rows)||!Array.isArray(S.chars))return;if(fol
  if(sel>=S.chars.length)sel=-1;open=sel;
  document.getElementById("r-chips").innerHTML='<button type="button" class="cp'+(sel===-1?" on":"")+'" data-i="-1">전체</button>'+S.chars.map((c,i)=>({c,i,p:num(c.power)})).sort((a,b)=>b.p-a.p).map(x=>'<button type="button" class="cp'+(x.i===sel?" on":"")+'" data-i="'+x.i+'">'+(E(x.c.name)||"이름 없음")+"</button>").join("");
  const known=new Set(S.chars.map(c=>c.name)),orph=S.rows.filter(r=>!known.has(ak(r)));
- root.innerHTML=(sel>=0?card(S.chars[sel],sel):S.chars.map((c,i)=>({c,i,p:num(c.power)})).sort((a,b)=>b.p-a.p).map(x=>card(x.c,x.i)).join(""))+(orph.length?'<div class="g-cc"><div class="g-nm">본캐릭터와 연결되지 않은 부케</div><div class="g-sub">'+orph.map(r=>E(r.name)).join(", ")+'<br>일정 표에서 계정 칸에 본캐릭터 이름을 입력하면 연결돼요.</div></div>':"")||'<p class="sub">본캐릭터를 먼저 추가해 주세요.</p>';}
+ root.innerHTML=(sel>=0?card(S.chars[sel],sel):S.chars.map((c,i)=>({c,i,p:num(c.power)})).sort((a,b)=>b.p-a.p).map(x=>card(x.c,x.i)).join(""))+(orph.length?'<div class="g-cc"><div class="g-nm">본캐릭터와 연결되지 않은 부케</div><div class="g-sub">'+orph.map(r=>E(r.name)).join(", ")+'<br>일정 표에서 계정 칸에 본캐릭터 이름을 입력하면 연결돼요.</div></div>':"")||'<p class="sub">아직 본캐릭터가 없어요. <a href="#grow">본캐 정보</a>에서 본캐릭터를 먼저 만들면 여기에 자동으로 나타나요.</p>';}
 const show=()=>{const el=root.querySelector(".g-cc.open");if(el&&el.scrollIntoView)el.scrollIntoView({block:"nearest"});};
 root.addEventListener("click",ev=>{const cc=ev.target.closest(".g-cc");if(!cc)return;const i=+cc.dataset.i,c=S.chars[i],t=ev.target.closest("[data-a]"),a=t&&t.dataset.a;if(!c)return;
  if(a==="s"||a==="e"){RA(a,+t.dataset.ri);return;}
@@ -1512,5 +1583,21 @@ html[data-view=mobile] .hv-sum{grid-template-columns:1fr 1fr}
 html[data-view=mobile] .hv-q,html[data-view=mobile] .hv-b{flex-wrap:wrap}
 html[data-view=mobile] .hv-q .h-b,html[data-view=mobile] .hv-b .h-b{min-height:46px}
 </style>
+<style>
+.g-wel,.g-nx,.g-need{border:1px solid var(--bd);border-radius:14px;background:var(--hd,var(--bg));padding:16px 18px;margin:0 0 16px}
+.g-wel{max-width:560px}.g-wel h3{margin:0 0 6px;font-size:18px;border:0;padding:0}.g-wel p{margin:0 0 12px;font-size:14px;color:var(--mut);line-height:1.5}
+.g-wf{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}.g-wf label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mut);flex:1 1 140px}
+.g-we{min-height:18px;margin:0 0 6px;font-size:13px;color:var(--bad,#f87171)}
+.g-nx{font-size:14px;line-height:1.5}.g-need{font-size:14px;color:var(--mut)}.g-need[hidden]{display:none}
+.g-wel a,.g-nx a,.g-need a{color:var(--ac);font-weight:600}
+</style>
+<script>
+(function(){
+const need=Array.from(document.querySelectorAll(".g-need"));
+function sync(){const none=!(Array.isArray(S.chars)&&S.chars.length);need.forEach(function(e){e.hidden=!none;});}
+const r0=render;render=function(){const x=r0.apply(this,arguments);sync();return x;};
+sync();
+})();
+</script>
 </body>
 </html>
