@@ -147,7 +147,7 @@ function G(i){return document.getElementById(i);}
    (service_role / secret 키는 절대 넣으면 안 돼요. 두 칸이 비어 있으면 예전처럼 이 브라우저에만 저장돼요.) */
 var SB_URL="https://iyfrzumvdjqocplzsota.supabase.co",SB_KEY="sb_publishable_LPI4AXbYxbd-mFfyBwGarQ_Xe42uX1_";
 var CLOUD=!!(SB_URL&&SB_KEY),SBC=null;
-if(CLOUD&&window.supabase){try{SBC=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});}catch(e){}}
+if(CLOUD&&window.supabase){try{SBC=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false},global:{fetch:function(u,o){return fetch(u,(o&&typeof o.body==="string"&&o.body.length<60000)?Object.assign({},o,{keepalive:true}):o);}}});}catch(e){}}
 var AK="guild-accounts",SK="guild-session",me=null;
 function ld(){try{return JSON.parse(localStorage.getItem(AK)||"{}")||{};}catch(e){return {};}}
 var A=CLOUD?{}:ld();
@@ -225,16 +225,17 @@ async function clogin(em,pw){
   if(r.error)return sbMsg(r.error);
   sess(em,true);location.reload();return "";
  }catch(x){return sbMsg(x);}}
-var sbUid=null,sbHas=false,sbTs=0;
+var sbUid=null,sbHas=false,sbVer=0,sbRev=true;
 async function sbUser(){var r=await SBC.auth.getSession(),s=r&&r.data&&r.data.session;if(!s)throw new Error("no-session");return s.user.id;}
-async function pull(){var uid=await sbUser(),r=await SBC.from("guild_state").select("data,ts").eq("user_id",uid).maybeSingle();
- if(r.error)throw r.error;sbUid=uid;sbHas=!!r.data;sbTs=r.data?(+r.data.ts||0):0;return r.data?r.data.data:null;}
-async function push(s){var uid=sbUid||await sbUser(),ts=+s.ts||Date.now(),r;
- if(!sbHas){r=await SBC.from("guild_state").insert({user_id:uid,data:s,ts:ts});
-  if(r.error){if(r.error.code==="23505")return false;throw r.error;}sbHas=true;sbUid=uid;}
- else{r=await SBC.from("guild_state").update({data:s,ts:ts,updated_at:new Date().toISOString()}).eq("user_id",uid).lte("ts",sbTs).select("user_id");
-  if(r.error)throw r.error;if(!r.data||!r.data.length)return false;}
- sbTs=ts;return true;}
+async function pull(){var uid=await sbUser(),r=await SBC.from("guild_state").select(sbRev?"data,ts,rev":"data,ts").eq("user_id",uid).maybeSingle();
+ if(r.error&&sbRev&&(r.error.code==="42703"||/rev/.test(r.error.message||""))){sbRev=false;return pull();}
+ if(r.error)throw r.error;sbUid=uid;sbHas=!!r.data;sbVer=r.data?(+(sbRev?r.data.rev:r.data.ts)||0):0;return r.data?r.data.data:null;}
+async function push(s){var uid=sbUid||await sbUser(),now=Date.now(),r;
+ if(!sbHas){var ins={user_id:uid,data:s,ts:now};if(sbRev)ins.rev=1;r=await SBC.from("guild_state").insert(ins);
+  if(r.error){if(r.error.code==="23505")return false;throw r.error;}sbHas=true;sbUid=uid;sbVer=sbRev?1:now;return true;}
+ var nv=sbRev?sbVer+1:Math.max(now,sbVer+1),up={data:s,ts:sbRev?now:nv,updated_at:new Date().toISOString()};if(sbRev)up.rev=nv;
+ r=await SBC.from("guild_state").update(up).eq("user_id",uid).eq(sbRev?"rev":"ts",sbVer).select("user_id");
+ if(r.error)throw r.error;if(!r.data||!r.data.length)return false;sbVer=nv;return true;}
 async function signup(id,pw,keep){
  if(CLOUD)return csignup(id,pw);
  if(!/^[A-Za-z0-9가-힣_.-]{2,20}$/.test(id))return "아이디는 2~20자의 한글·영문·숫자·_ . - 만 쓸 수 있어요.";
@@ -299,6 +300,25 @@ return{sb:function(){return(CLOUD&&SBC&&me)?SBC:null;},me:function(){return me;}
 .hv-rst{margin:18px 0 4px;display:flex;gap:10px;align-items:center}.hv-rst small{color:var(--mut);font-size:12px}
 #sn{width:100%}.ntx{width:100%;box-sizing:border-box;max-width:820px;margin:0;line-height:1.7;font-size:14px}.ntx h2{margin:22px 0 8px;font-size:17px}.ntx h3{margin:14px 0 4px;font-size:15px}.ntx p,.ntx li{color:var(--fg)}.ntx ul,.ntx ol{margin:6px 0 6px 20px;padding:0}.ntx .ntb{background:var(--hd);border:1px solid var(--bd);border-radius:12px;padding:12px 14px;margin:10px 0}.ntx .ntm{color:var(--mut);font-size:13px}
 .ntx textarea{display:block;width:100%;min-height:380px;box-sizing:border-box;padding:12px;border:1px solid var(--bd);border-radius:10px;background:var(--hd);color:var(--fg);font:inherit;line-height:1.6;resize:vertical}.ntx .ntbt{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.ntx .nth{font-size:12px;color:var(--mut);margin:8px 0}.ntx .ntst{font-size:13px;margin:6px 0}
+/* 폰 화면 가독성 */
+html[data-view=mobile] .g-h{flex-wrap:wrap;gap:6px 12px}
+html[data-view=mobile] .g-h>div:first-child{flex:1 1 200px;min-width:0}
+html[data-view=mobile] .g-h .r-st{text-align:left;flex:1 1 100%}
+html[data-view=mobile] .r-st small{white-space:normal}
+html[data-view=mobile] .g-nm,html[data-view=mobile] .g-sub,html[data-view=mobile] .hv-qn b,html[data-view=mobile] .h-i .nm b{overflow-wrap:anywhere;word-break:keep-all}
+html[data-view=mobile] .h-i{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;row-gap:3px;align-items:center}
+html[data-view=mobile] .h-i .nm{grid-column:1;grid-row:1;width:auto}
+html[data-view=mobile] .h-i .r-st{grid-column:1;grid-row:2;display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;text-align:left}
+html[data-view=mobile] .h-i .r-st small{margin:0}
+html[data-view=mobile] .h-i>.h-b{grid-column:2;grid-row:1/3;align-self:center}
+html[data-view=mobile] .hv-big{font-size:21px}
+html[data-view=mobile] .hv-sanc{margin:8px 0 4px;padding:8px 10px}
+html[data-view=mobile] .hv-p,html[data-view=mobile] .g-cc{padding:12px 14px}
+html[data-view=mobile] .hv-b{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;row-gap:4px;align-items:center}
+html[data-view=mobile] .hv-b .hv-qn{grid-column:1;grid-row:1}
+html[data-view=mobile] .hv-b .hv-t{grid-column:1;grid-row:2;justify-self:start}
+html[data-view=mobile] .hv-b>.h-b{grid-column:2;grid-row:1/3;align-self:center}
+html[data-view=mobile] .hv-q .hv-qn{flex:1 1 130px}
 </style>
 </head>
 <body>
@@ -728,9 +748,9 @@ function renderR(){
       r.availAt=t;delete r.endAt;r.seen=fmtKo(t);si.value=r.seen;up(true);dirty=true;queue();};rm.className="rm";es.className="es";
     td(bd);
     const eb=document.createElement("button");eb.textContent="종료";eb.title="미션을 끝냈을 때 누르세요 (지금부터 3일 뒤 진행 가능)";
-    eb.onclick=()=>{const n=Date.now();S.log=S.log||[];const le={id:uid(),name:r.name,start:typeof r.startAt==="number"?r.startAt:null,end:n,memo:r.logMemo||""};if(r.logMemoC)le.memoC=r.logMemoC;S.log.push(le);delete r.logMemo;delete r.logMemoC;delete r.startAt;r.endAt=n;r.availAt=n+259200000;r.seen=fmtKo(r.availAt);render();queue();};
+    eb.onclick=()=>{const n=Date.now();S.log=S.log||[];const le={id:uid(),name:r.name,start:typeof r.startAt==="number"?r.startAt:null,end:n,memo:r.logMemo||""};if(r.logMemoC)le.memoC=r.logMemoC;S.log.push(le);delete r.logMemo;delete r.logMemoC;delete r.startAt;r.endAt=n;r.availAt=n+259200000;r.seen=fmtKo(r.availAt);render();queue(true);};
     const sb=document.createElement("button");sb.className="sbtn";sb.textContent="시작";sb.title="미션을 시작할 때 누르세요 (시작 시각이 기록돼요)";
-    sb.onclick=()=>{if(typeof r.startAt==="number"&&!confirm("이미 시작 기록이 있어요. 지금 시각으로 다시 시작할까요?"))return;r.startAt=Date.now();render();queue();};
+    sb.onclick=()=>{if(typeof r.startAt==="number"&&!confirm("이미 시작 기록이 있어요. 지금 시각으로 다시 시작할까요?"))return;r.startAt=Date.now();render();queue(true);};
     const bx=document.createElement("div");bx.className="rbt";bx.append(sb,eb);
     td(bx,es);td(rmi,rm);
     const x=document.createElement("button");x.className="x";x.textContent="✕";x.title="캐릭터 삭제";
@@ -773,7 +793,7 @@ function renderLog(){
     const bd=document.createElement("span");bd.className="rb ing";bd.textContent="진행 중";
     const du=document.createElement("span");du.className="df2";
     const f=()=>{du.textContent=fmtDur(Date.now()-r.startAt);};f();RU.push(f);
-    addRow(r.name,r.startAt,bd,du,()=>{if(confirm((r.name||"이 캐릭터")+"의 시작 기록을 취소할까요?")){delete r.startAt;delete r.logMemo;delete r.logMemoC;render();queue();}},"시작 취소",r,"logMemo");
+    addRow(r.name,r.startAt,bd,du,()=>{if(confirm((r.name||"이 캐릭터")+"의 시작 기록을 취소할까요?")){delete r.startAt;delete r.logMemo;delete r.logMemoC;render();queue(true);}},"시작 취소",r,"logMemo");
   });
   S.log.map((x,i)=>({x,i})).sort((a,b)=>b.x.end-a.x.end).forEach(({x,i})=>{
     cnt++;
@@ -934,18 +954,60 @@ function parseT(s){
 }
 let RU=[];function tickAll(){RU.forEach(f=>f());}
 setInterval(tickAll,5000);
-function queue(){pend=true;st.textContent="저장 중…";clearTimeout(timer);timer=setTimeout(save,700);}
+let BASE=null,busy=false,again=false,fails=0,rtm=0;const BK=LS+"-base",LISTS=["rows","chars","log"],STAMP=["rows","chars"];
+const jx=o=>{const r=Object.assign({},o);delete r.u;return JSON.stringify(r);};
+const snap=o=>JSON.parse(JSON.stringify(o));
+const idx=(B,k)=>{const m={};((B&&B[k])||[]).forEach(o=>{if(o&&o.id)m[o.id]=jx(o);});return m;};
+const cmp=x=>JSON.stringify([LISTS.map(k=>(x[k]||[]).map(jx).sort()),["missions","gcolors","cleon"].map(k=>x[k])]);
+// 새로 만들었거나 바뀐 부케·주캐릭터에 id와 수정 시각(u)을 붙여요
+function stampIds(){STAMP.forEach(k=>{if(!Array.isArray(S[k]))return;const bm=idx(BASE,k);S[k].forEach(o=>{if(!o||typeof o!=="object")return;if(!o.id)o.id=uid();if(bm[o.id]!==jx(o))o.u=Date.now();});});}
+// 3자 병합: 마지막으로 동기화한 상태(B)를 기준으로 내 변경과 서버 변경을 항목 단위로 합쳐요
+function mlist(L,V,Bj){const lm={},vm={},out=[],seen={};L.forEach(o=>{lm[o.id]=o;});V.forEach(o=>{vm[o.id]=o;});
+ L.concat(V).forEach(o=>{const id=o.id;if(seen[id])return;seen[id]=1;const l=lm[id],v=vm[id],b=Bj[id];
+  if(l&&v){if(jx(l)===jx(v))out.push(l);else if(b===jx(l))out.push(v);else if(b===jx(v))out.push(l);else out.push((l.u||0)>=(v.u||0)?l:v);}
+  else if(l){if(b===undefined||b!==jx(l))out.push(l);}
+  else if(v){if(b===undefined||b!==jx(v))out.push(v);}});
+ return out;}
+function merge(L,V,B){
+ if((V.rows||[]).some(o=>!o.id)||(V.chars||[]).some(o=>!o.id))return L;
+ const o=Object.assign({},L);LISTS.forEach(k=>{o[k]=mlist(L[k]||[],V[k]||[],idx(B,k));});
+ ["missions","gcolors","cleon"].forEach(k=>{const l=JSON.stringify(L[k]),v=JSON.stringify(V[k]),b=B?JSON.stringify(B[k]):undefined;o[k]=(l===v||b===undefined||b!==l)?(b===undefined||l===v||b===l?(b===l&&l!==v?V[k]:L[k]):L[k]):L[k];});
+ o.log.sort((a,b)=>(a.end||0)-(b.end||0));o.ts=Math.max(L.ts||0,V.ts||0);return o;}
+function keep(){try{localStorage.setItem(BK,JSON.stringify(BASE));}catch(e){}}
+function adopt(){try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}render();}
+async function put(){const C=GAUTH.cloud();if(!C)throw new Error("nocloud");
+ for(let i=0;i<4;i++){stampIds();S.ts=Date.now();const sent=snap(S);
+  if(await C.push(sent)){BASE=sent;keep();return;}
+  const n=normalize(await C.pull());if(n){S=merge(S,n,BASE);adopt();}}
+ throw new Error("conflict");}
+function queue(now){pend=true;st.textContent="저장 중…";clearTimeout(timer);timer=setTimeout(save,now===true?0:700);}
 async function save(){
-  pend=false;S.ts=Date.now();let lok=true;
-  try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){lok=false;}
-  try{
-    if(ref){await ref.set(S);st.textContent="저장됨 ✓ "+new Date().toLocaleTimeString("ko-KR");}
-    else st.textContent=lok?"이 브라우저에 저장됨 ✓ "+new Date().toLocaleTimeString("ko-KR"):"저장 실패";
-  }catch(e){st.textContent=(e&&e.message==="conflict")?"다른 기기에서 더 최근에 저장돼 있어 서버 내용을 새로 불러왔어요":(lok?"서버 저장 실패 · 이 브라우저에 저장됨":"저장 실패");}
+ if(busy){again=true;return;}
+ busy=true;pend=false;clearTimeout(timer);clearTimeout(rtm);
+ stampIds();S.ts=Date.now();let lok=true;
+ try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){lok=false;}
+ const t=new Date().toLocaleTimeString("ko-KR");
+ try{
+  if(ref){await ref.set(S);fails=0;st.textContent="저장됨 ✓ "+t;}
+  else st.textContent=lok?"이 브라우저에 저장됨 ✓ "+t:"저장 실패";
+ }catch(e){
+  if(ref){fails++;st.textContent="서버 저장 실패 · 이 브라우저에 저장됨 · 자동으로 다시 시도해요";rtm=setTimeout(()=>{pend=true;save();},Math.min(30000,2000*fails));}
+  else st.textContent=lok?"이 브라우저에 저장됨 ✓ "+t:"저장 실패";
+ }
+ busy=false;if(again){again=false;save();}
 }
-function flush(){if(!pend)return;try{S.ts=Date.now();localStorage.setItem(LS,JSON.stringify(S));pend=false;}catch(e){}}
+// 다른 기기의 변경을 가져와 합쳐요 (화면으로 돌아올 때, 1분마다, 인터넷이 다시 연결될 때)
+async function refresh(){const C=GAUTH.cloud();if(!C||!ref||busy||pend)return;
+ try{const n=normalize(await C.pull());if(!n||busy||pend)return;
+  stampIds();const m=merge(S,n,BASE);if(cmp(m)!==cmp(S)){S=m;adopt();st.textContent="다른 기기의 변경을 불러왔어요 ✓";}
+  if(cmp(S)===cmp(n)){BASE=snap(S);keep();}else save();
+ }catch(e){}}
+function flush(){if(!pend)return;try{S.ts=Date.now();localStorage.setItem(LS,JSON.stringify(S));}catch(e){}clearTimeout(timer);if(busy)again=true;else save();}
 addEventListener("pagehide",flush);
-document.addEventListener("visibilitychange",()=>{if(document.hidden)flush();});
+document.addEventListener("visibilitychange",()=>{if(document.hidden)flush();else refresh();});
+addEventListener("online",()=>{if(fails)save();else refresh();});
+setInterval(()=>{if(!document.hidden)refresh();},60000);
+addEventListener("beforeunload",e=>{if(pend||fails){e.preventDefault();e.returnValue="";}});
 const addRow=()=>{const v={};S.missions.forEach(m=>v[m.id]=0);S.rows.push({name:"",lv:"",seen:"",vals:v,wrote:"",note:""});render();queue();};
 $("add").onclick=addRow;$("add2").onclick=addRow;
 $("addm").onclick=()=>{
@@ -1083,15 +1145,14 @@ if(!(Array.isArray(S.chars)&&S.chars.length)){try{showPage("grow",true);}catch(e
   try{data=await C.pull();}catch(e){st.textContent="서버에 연결하지 못했어요 · 이 브라우저에만 저장돼요";return;}
   const n=normalize(data);
   if(data&&!n){st.textContent="서버 데이터를 읽지 못해 서버에는 저장하지 않아요";return;}
-  const put=async s=>{
-    if(await C.push(s))return;
-    let d2=null;try{d2=await C.pull();}catch(e){}
-    const n2=normalize(d2);
-    if(n2){S=n2;try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}render();}
-    throw new Error("conflict");};
   ref={set:put};
-  if(n&&(n.ts||0)>(S.ts||0)){S=n;try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}render();st.textContent="서버에서 불러옴 ✓";}
-  else{try{S.ts=S.ts||Date.now();await put(S);st.textContent="서버에 저장됨 ✓";}catch(e){st.textContent="서버 저장 실패 · 이 브라우저에 저장됨";}}
+  const fail=()=>{fails++;st.textContent="서버 저장 실패 · 이 브라우저에 저장됨 · 자동으로 다시 시도해요";rtm=setTimeout(()=>{pend=true;save();},3000);};
+  try{BASE=JSON.parse(localStorage.getItem(BK)||"null");}catch(e){BASE=null;}
+  if(n&&BASE){stampIds();S=merge(S,n,BASE);adopt();
+    if(cmp(S)===cmp(n)){BASE=snap(S);keep();st.textContent="서버와 동기화됨 ✓";}
+    else{try{await put();st.textContent="서버에 저장됨 ✓";}catch(e){fail();}}}
+  else if(n&&(n.ts||0)>(S.ts||0)){S=n;BASE=snap(S);keep();adopt();st.textContent="서버에서 불러옴 ✓";}
+  else{try{S.ts=S.ts||Date.now();await put();st.textContent="서버에 저장됨 ✓";}catch(e){fail();}}
 })();
 (async()=>{
   try{
@@ -1302,13 +1363,13 @@ function RP(k,ix){const rs=ix.map(i=>S.rows[i]).filter(Boolean);if(!rs.length)re
  if(k==="s"){rs.forEach(r=>{r.startAt=n;});}
  else{if(!confirm(rs.map(r=>r.name||"이름 없음").join(", ")+" 진행을 함께 종료할까요? 3일 뒤에 다시 진행할 수 있어요."))return;
   S.log=S.log||[];rs.forEach(r=>{const le={id:uid(),name:r.name,start:typeof r.startAt==="number"?r.startAt:null,end:n,memo:r.logMemo||""};if(r.logMemoC)le.memoC=r.logMemoC;S.log.push(le);delete r.logMemo;delete r.logMemoC;delete r.startAt;r.endAt=n;r.availAt=n+259200000;r.seen=fmtKo(r.availAt);});}
- render();queue();}
+ render();queue(true);}
 window.RA=function(k,i){const r=S.rows[i];if(!r)return;
- if(k==="d"){if(!confirm((r.name||"이 캐릭터")+"를 게임에서 삭제했나요? 지금부터 3일 뒤에 다시 진행할 수 있어요."))return;const n=Date.now();r.hold=false;r.endAt=n;r.availAt=n+259200000;r.seen=fmtKo(r.availAt);render();queue();return;}
+ if(k==="d"){if(!confirm((r.name||"이 캐릭터")+"를 게임에서 삭제했나요? 지금부터 3일 뒤에 다시 진행할 수 있어요."))return;const n=Date.now();r.hold=false;r.endAt=n;r.availAt=n+259200000;r.seen=fmtKo(r.availAt);render();queue(true);return;}
  if(k==="s"){r.startAt=Date.now();}
  else{if(!confirm((r.name||"이 캐릭터")+" 진행을 종료할까요? 3일 뒤에 다시 진행할 수 있어요."))return;
   const n=Date.now();S.log=S.log||[];const le={id:uid(),name:r.name,start:typeof r.startAt==="number"?r.startAt:null,end:n,memo:r.logMemo||""};if(r.logMemoC)le.memoC=r.logMemoC;S.log.push(le);delete r.logMemo;delete r.logMemoC;delete r.startAt;r.endAt=n;r.availAt=n+259200000;r.seen=fmtKo(r.availAt);}
- render();queue();};
+ render();queue(true);};
 $h.addEventListener("click",ev=>{const b=ev.target.closest("[data-h]");if(b)RA(b.dataset.h,+b.dataset.i);const p=ev.target.closest("[data-px]");if(p)RP(p.dataset.px,p.dataset.ix.split(",").map(Number));});
 const r1=render;render=function(){const x=r1.apply(this,arguments);draw();return x;};
 const s1=showPage;showPage=function(k,keep){s1(k,keep);if(k==="home"||!PG[k])draw();};
